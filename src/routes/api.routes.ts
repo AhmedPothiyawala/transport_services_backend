@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { sendOtp, verifyOtpAndLogin, updateProfile, deleteProfile } from '../controllers/auth.controller';
+import { sendOtp, verifyOtpAndLogin, registerUser, updateProfile, deleteProfile } from '../controllers/auth.controller';
 import { createBranch, getBranches, deleteBranch } from '../controllers/branch.controller';
 import {
   createBuilty,
@@ -19,6 +19,8 @@ const router = Router();
 // Public / Auth Routes
 router.post('/auth/send-otp', sendOtp);
 router.post('/auth/verify-otp', verifyOtpAndLogin);
+router.post('/auth/login', verifyOtpAndLogin);
+router.post('/auth/register', registerUser);
 router.post('/auth/update-profile', authenticate, updateProfile);
 router.post('/auth/delete-profile', authenticate, deleteProfile);
 

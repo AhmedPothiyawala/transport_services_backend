@@ -12,32 +12,47 @@ export interface AuthRequest extends Request {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'transport_management_super_secret_jwt_key_2026';
 
+/**
+ * Giant Security Middleware: JWT Authentication & Signature Validation
+ */
 export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ status: false, message: 'Authorization token missing or invalid' });
+    return res.status(401).json({ status: false, message: 'Access Denied: Authorization token missing or malformed' });
   }
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    // Enforce HS256 algorithm verification against token manipulation
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as any;
+    
+    if (!decoded || !decoded.id || !decoded.role) {
+      return res.status(401).json({ status: false, message: 'Access Denied: Invalid token claims' });
+    }
+
     req.user = decoded;
     next();
-  } catch (err) {
-    return res.status(401).json({ status: false, message: 'Invalid or expired token' });
+  } catch (err: any) {
+    return res.status(401).json({
+      status: false,
+      message: err.name === 'TokenExpiredError' ? 'Session expired. Please log in again.' : 'Invalid authentication token',
+    });
   }
 };
 
+/**
+ * Role-Based Access Control (RBAC) Authorization Middleware
+ */
 export const authorize = (allowedRoles: Array<'MAIN_ADMIN' | 'SUB_ADMIN' | 'USER' | 'DRIVER'>) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({ status: false, message: 'User not authenticated' });
+      return res.status(401).json({ status: false, message: 'Authentication required' });
     }
 
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         status: false,
-        message: `Access denied. Role ${req.user.role} does not have required permissions.`,
+        message: `Forbidden: Role '${req.user.role}' is not authorized to access this resource. Required role(s): ${allowedRoles.join(', ')}`,
       });
     }
 

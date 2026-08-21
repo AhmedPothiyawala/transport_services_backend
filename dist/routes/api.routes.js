@@ -13,6 +13,8 @@ const router = (0, express_1.Router)();
 // Public / Auth Routes
 router.post('/auth/send-otp', auth_controller_1.sendOtp);
 router.post('/auth/verify-otp', auth_controller_1.verifyOtpAndLogin);
+router.post('/auth/login', auth_controller_1.verifyOtpAndLogin);
+router.post('/auth/register', auth_controller_1.registerUser);
 router.post('/auth/update-profile', auth_1.authenticate, auth_controller_1.updateProfile);
 router.post('/auth/delete-profile', auth_1.authenticate, auth_controller_1.deleteProfile);
 // Branch Management (Main Admin)

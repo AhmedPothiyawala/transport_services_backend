@@ -6,9 +6,13 @@ CREATE TABLE IF NOT EXISTS users (
     mobile VARCHAR(20) UNIQUE NOT NULL,
     address TEXT,
     role VARCHAR(20) NOT NULL CHECK (role IN ('MAIN_ADMIN', 'SUB_ADMIN', 'USER', 'DRIVER')),
+    password_hash VARCHAR(255),
     otp VARCHAR(6),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Ensure password_hash column exists on existing installations
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
 
 CREATE TABLE IF NOT EXISTS branches (
     id SERIAL PRIMARY KEY,
@@ -84,13 +88,13 @@ INSERT INTO branches (id, branch_name, city, code)
 VALUES (1, 'Ahmedabad Main Hub', 'Ahmedabad', 'AHM01')
 ON CONFLICT (code) DO NOTHING;
 
--- Seed Initial Test Users for 4 Role Modules
-INSERT INTO users (name, mobile, address, role, otp) 
+-- Seed Initial Test Users with Bcrypt Password Hash (Default Password: "123456")
+INSERT INTO users (name, mobile, address, role, password_hash, otp) 
 VALUES 
-  ('Sonu Sir (Main Admin)', '9999999999', 'Headquarters, Ahmedabad', 'MAIN_ADMIN', '123456'),
-  ('Sub Admin User', '8888888888', 'Branch Office, Delhi', 'SUB_ADMIN', '123456'),
-  ('Sample Driver', '7777777777', 'Logistics Hub, Mumbai', 'DRIVER', '123456'),
-  ('Sample Customer', '6666666666', 'Ahmedabad Market', 'USER', '123456')
-ON CONFLICT (mobile) DO NOTHING;
+  ('Sonu Sir (Main Admin)', '9999999999', 'Headquarters, Ahmedabad', 'MAIN_ADMIN', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', '123456'),
+  ('Sub Admin User', '8888888888', 'Branch Office, Delhi', 'SUB_ADMIN', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', '123456'),
+  ('Sample Driver', '7777777777', 'Logistics Hub, Mumbai', 'DRIVER', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', '123456'),
+  ('Sample Customer', '6666666666', 'Ahmedabad Market', 'USER', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', '123456')
+ON CONFLICT (mobile) DO UPDATE SET password_hash = EXCLUDED.password_hash;
 
 
