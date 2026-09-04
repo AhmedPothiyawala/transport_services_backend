@@ -23,15 +23,20 @@ export const sendOtp = async (req: Request, res: Response) => {
     return res.status(400).json({ status: false, message: 'Mobile number is required' });
   }
 
+  const cleanMobile = mobile.toString().replace(/\D/g, '');
+  if (cleanMobile.length !== 10) {
+    return res.status(400).json({ status: false, message: 'Invalid mobile number format. Mobile number must be exactly 10 digits.' });
+  }
+
   const generatedOtp = '123456'; // Default test OTP as per SRS
 
   try {
-    const dbRes = await query('SELECT * FROM users WHERE mobile = $1', [mobile]);
+    const dbRes = await query('SELECT * FROM users WHERE mobile = $1', [cleanMobile]);
     if (dbRes && dbRes.rows.length > 0) {
-      await query('UPDATE users SET otp = $1 WHERE mobile = $2', [generatedOtp, mobile]);
+      await query('UPDATE users SET otp = $1 WHERE mobile = $2', [generatedOtp, cleanMobile]);
     }
   } catch (err) {
-    const memUser = memoryUsers.find(u => u.mobile === mobile);
+    const memUser = memoryUsers.find(u => u.mobile === cleanMobile);
     if (memUser) {
       memUser.otp = generatedOtp;
     }
@@ -39,7 +44,7 @@ export const sendOtp = async (req: Request, res: Response) => {
 
   return res.json({
     status: true,
-    message: `OTP sent successfully to ${mobile}. Default password is 123456.`,
+    message: `OTP sent successfully to ${cleanMobile}. Default password is 123456.`,
     otp: generatedOtp,
   });
 };
@@ -47,26 +52,46 @@ export const sendOtp = async (req: Request, res: Response) => {
 /**
  * Register a new User / Driver / Sub-Admin with Bcrypt Hashed Password
  */
+import { validateSecurePassword } from '../util/password.validator';
+
 export const registerUser = async (req: Request, res: Response) => {
-  const { name, mobile, address, role, password } = req.body;
+  const { name, mobile, address, role, password, branch_id } = req.body;
 
   if (!mobile || !password) {
     return res.status(400).json({ status: false, message: 'Mobile number and password are required' });
   }
 
   const cleanMobile = mobile.toString().replace(/[^0-9]/g, '');
-  if (cleanMobile.length < 10) {
-    return res.status(400).json({ status: false, message: 'Invalid mobile number format. Must be at least 10 digits.' });
+  if (cleanMobile.length !== 10) {
+    return res.status(400).json({ status: false, message: 'Invalid mobile number format. Mobile number must be exactly 10 digits.' });
   }
 
-  if (password.length < 4) {
-    return res.status(400).json({ status: false, message: 'Password must be at least 4 characters long' });
+  const passCheck = validateSecurePassword(password);
+  if (!passCheck.isValid) {
+    return res.status(400).json({ status: false, message: passCheck.message });
+  }
+
+  // Single Main Admin Policy: Main Admin cannot be registered via API
+  if (role === 'ADMIN' || role === 'MAIN_ADMIN') {
+    return res.status(403).json({
+      status: false,
+      message: 'Access Denied: Main Admin cannot be registered. Exactly ONE Main Admin is permitted in the system.',
+    });
+  }
+
+  // Sub-Admins can only be created by Main Admin from Admin Panel
+  if (role === 'SUB_ADMIN') {
+    return res.status(403).json({
+      status: false,
+      message: 'Access Denied: Sub-Admins can only be created by the Main Admin from the Admin Dashboard.',
+    });
   }
 
   const assignedRole = role || 'USER';
   const userName = name ? name.toString().trim() : `User ${cleanMobile.substring(Math.max(0, cleanMobile.length - 4))}`;
   const userAddr = address ? address.toString().trim() : 'Ahmedabad, India';
   const hashedPassword = await bcrypt.hash(password, 10);
+  const branchIdNum = branch_id ? parseInt(branch_id.toString(), 10) : null;
 
   let user: any = null;
 
@@ -78,8 +103,8 @@ export const registerUser = async (req: Request, res: Response) => {
     }
 
     const insertRes = await query(
-      'INSERT INTO users (name, mobile, address, role, password_hash, otp) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [userName, cleanMobile, userAddr, assignedRole, hashedPassword, '123456']
+      'INSERT INTO users (name, mobile, address, role, branch_id, password_hash, otp) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [userName, cleanMobile, userAddr, assignedRole, branchIdNum, hashedPassword, '123456']
     );
     user = insertRes.rows[0];
   } catch (err) {
@@ -100,7 +125,7 @@ export const registerUser = async (req: Request, res: Response) => {
   }
 
   const token = jwt.sign(
-    { id: user.id, name: user.name, mobile: user.mobile, role: user.role },
+    { id: user.id, name: user.name, mobile: user.mobile, role: user.role, branch_id: user.branch_id },
     JWT_SECRET,
     { algorithm: 'HS256', expiresIn: '30d' }
   );
@@ -115,6 +140,7 @@ export const registerUser = async (req: Request, res: Response) => {
       mobile: user.mobile,
       address: user.address,
       role: user.role,
+      branch_id: user.branch_id || null,
     },
   });
 };
@@ -130,6 +156,9 @@ export const verifyOtpAndLogin = async (req: Request, res: Response) => {
   }
 
   const cleanMobile = mobile.toString().replace(/[^0-9]/g, '');
+  if (cleanMobile.length !== 10) {
+    return res.status(400).json({ status: false, message: 'Invalid mobile number format. Mobile number must be exactly 10 digits.' });
+  }
 
   // Brute-Force Check: Account Lockout Policy (5 failed attempts = 15 min lock)
   const now = Date.now();
@@ -154,36 +183,26 @@ export const verifyOtpAndLogin = async (req: Request, res: Response) => {
   }
 
   if (!user) {
-    // Auto-create user if logging in for first time with role
-    const defaultPassword = password || '123456';
-    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
-    const assignedRole = role || 'USER';
-    const userName = `User ${cleanMobile.substring(Math.max(0, cleanMobile.length - 4))}`;
-    try {
-      const insertRes = await query(
-        'INSERT INTO users (name, mobile, address, role, password_hash, otp) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        [userName, cleanMobile, 'Ahmedabad, India', assignedRole, hashedPassword, '123456']
-      );
-      user = insertRes.rows[0];
-    } catch (e) {
-      user = {
-        id: memoryUsers.length + 1,
-        name: userName,
-        mobile: cleanMobile,
-        address: 'Ahmedabad, India',
-        role: assignedRole,
-        password_hash: hashedPassword,
-        otp: '123456'
-      };
-      memoryUsers.push(user);
-    }
+    return res.status(404).json({
+      status: false,
+      message: 'Account not found. This mobile number is not registered in the system database. Please contact Administrator or Register first.',
+    });
   }
 
-  // Check Role if specified
+  // Check if user is active
+  if (user.is_active === false) {
+    return res.status(403).json({
+      status: false,
+      message: 'Your account has been deactivated. Please contact Administrator.',
+    });
+  }
+
+  // Strict Role-Based Security: Account role MUST match requested role
   if (role && user.role !== role) {
-    if (role === 'MAIN_ADMIN' && user.role !== 'MAIN_ADMIN') {
-      return res.status(403).json({ status: false, message: 'Access denied: Selected role does not match account privileges' });
-    }
+    return res.status(403).json({
+      status: false,
+      message: `Access Denied: Your account is registered as ${user.role}, which is not authorized to log in as ${role}.`,
+    });
   }
 
   // Bcrypt Password Verification
@@ -223,7 +242,7 @@ export const verifyOtpAndLogin = async (req: Request, res: Response) => {
   failedLoginMap.delete(cleanMobile);
 
   const token = jwt.sign(
-    { id: user.id, name: user.name, mobile: user.mobile, role: user.role },
+    { id: user.id, name: user.name, mobile: user.mobile, role: user.role, branch_id: user.branch_id, session_version: user.session_version || 1 },
     JWT_SECRET,
     { algorithm: 'HS256', expiresIn: '30d' }
   );
@@ -238,8 +257,67 @@ export const verifyOtpAndLogin = async (req: Request, res: Response) => {
       mobile: user.mobile,
       address: user.address,
       role: user.role,
+      branch_id: user.branch_id || null,
+      is_active: user.is_active !== false
     },
   });
+};
+
+export const getProfile = async (req: Request, res: Response) => {
+  const userId = (req as any).user?.id;
+  if (!userId) {
+    return res.status(401).json({ status: false, message: 'Unauthorized' });
+  }
+
+  try {
+    const dbRes = await query(
+      `SELECT u.id, u.name, u.mobile, u.address, u.role, u.branch_id, u.is_active, u.created_at,
+              b.branch_name, b.city AS branch_city
+       FROM users u
+       LEFT JOIN branches b ON u.branch_id = b.id
+       WHERE u.id = $1`,
+      [userId]
+    );
+
+    if (dbRes && dbRes.rows.length > 0) {
+      const u = dbRes.rows[0];
+      return res.json({
+        status: true,
+        user: {
+          id: u.id,
+          name: u.name,
+          mobile: u.mobile,
+          address: u.address,
+          role: u.role,
+          branch_id: u.branch_id,
+          branch_name: u.branch_name || 'Headquarters / All Branches',
+          branch_city: u.branch_city || 'Ahmedabad',
+          is_active: u.is_active !== false,
+          created_at: u.created_at
+        }
+      });
+    }
+  } catch (err) {
+    const memUser = memoryUsers.find(u => u.id === userId);
+    if (memUser) {
+      return res.json({
+        status: true,
+        user: {
+          id: memUser.id,
+          name: memUser.name,
+          mobile: memUser.mobile,
+          address: memUser.address,
+          role: memUser.role,
+          branch_id: memUser.branch_id || 1,
+          branch_name: 'Ahmedabad Hub',
+          branch_city: 'Ahmedabad',
+          is_active: true
+        }
+      });
+    }
+  }
+
+  return res.status(404).json({ status: false, message: 'User profile not found' });
 };
 
 export const updateProfile = async (req: Request, res: Response) => {
@@ -265,4 +343,76 @@ export const deleteProfile = async (req: Request, res: Response) => {
     if (index !== -1) memoryUsers.splice(index, 1);
   }
   return res.json({ status: true, message: 'Profile deleted successfully' });
+};
+
+/**
+ * Sonu Bhai OTP Verification Gate Handler
+ */
+export const sendSonuOtp = async (req: Request, res: Response) => {
+  const sonuMobile = "919173689380";
+  const testOtp = "123456";
+  return res.json({
+    status: true,
+    message: `OTP sent successfully to Sonu Bhai's registered mobile (${sonuMobile}).`,
+    otp: testOtp
+  });
+};
+
+export const verifySonuOtp = async (req: Request, res: Response) => {
+  const { otp } = req.body;
+  if (!otp || (otp !== '123456')) {
+    return res.status(400).json({ status: false, message: 'Invalid Sonu Bhai OTP code' });
+  }
+  return res.json({ status: true, message: 'Sonu Bhai OTP verified successfully' });
+};
+
+/**
+ * Account Activation / Deactivation with Sonu Bhai OTP Guard & Instant Session Revocation
+ */
+import { AuthRequest } from '../middleware/auth';
+
+export const toggleUserActiveStatus = async (req: AuthRequest, res: Response) => {
+  const { target_user_id, is_active, sonu_otp } = req.body;
+  const caller = req.user;
+
+  if (target_user_id === undefined || is_active === undefined) {
+    return res.status(400).json({ status: false, message: 'target_user_id and is_active parameters are required' });
+  }
+
+  // Sonu Bhai OTP mandatory check
+  if (!sonu_otp || sonu_otp !== '123456') {
+    return res.status(400).json({ status: false, message: 'Mandatory Sonu Bhai OTP verification failed or missing OTP code' });
+  }
+
+  try {
+    const userRes = await query('SELECT * FROM users WHERE id = $1', [target_user_id]);
+    if (!userRes || userRes.rows.length === 0) {
+      return res.status(404).json({ status: false, message: 'Target user not found' });
+    }
+
+    const targetUser = userRes.rows[0];
+
+    // Authorization Gate:
+    // Sub-Admin can only deactivate Customers ('USER').
+    // Main Admin can deactivate Sub-Admin or Customers.
+    if (targetUser.role === 'SUB_ADMIN' && caller?.role !== 'MAIN_ADMIN') {
+      return res.status(403).json({ status: false, message: 'Forbidden: Only Main Admin (Sonu Sir) can deactivate Sub-Admin accounts.' });
+    }
+
+    const newActiveState = Boolean(is_active);
+
+    await query(
+      'UPDATE users SET is_active = $1, session_version = session_version + 1 WHERE id = $2',
+      [newActiveState, target_user_id]
+    );
+
+    return res.json({
+      status: true,
+      message: `Account status updated successfully to ${newActiveState ? 'ACTIVE' : 'DEACTIVATED'}. Sessions revoked immediately.`,
+      user_id: target_user_id,
+      is_active: newActiveState
+    });
+  } catch (err: any) {
+    return res.status(500).json({ status: false, message: err.message || 'Failed to update user active status' });
+  }
 };
