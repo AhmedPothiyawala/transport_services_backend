@@ -1,107 +1,234 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.addPaymentEntry = exports.getOutstandingSummary = exports.getPartyLedger = void 0;
+exports.addPaymentEntry = exports.getOutstandingSummary = exports.getPartyLedger = exports.memoryLedgers = void 0;
 const pool_1 = require("../db/pool");
-const memoryLedgers = [];
+exports.memoryLedgers = [];
 const getPartyLedger = async (req, res) => {
-    const { party_name, start_date, end_date } = req.query;
+    const { party_name, mobile, start_date, end_date } = req.query;
     const user = req.user;
-    try {
-        let sql = 'SELECT * FROM ledgers WHERE 1=1';
-        const params = [];
-        if (user?.role === 'USER') {
-            params.push(`%${user.name}%`);
-            sql += ` AND party_name ILIKE $${params.length}`;
-        }
-        else if (party_name) {
-            params.push(`%${party_name}%`);
-            sql += ` AND party_name ILIKE $${params.length}`;
-        }
-        if (start_date && end_date) {
-            params.push(start_date, end_date);
-            sql += ` AND DATE(created_at) BETWEEN $${params.length - 1} AND $${params.length}`;
-        }
-        sql += ' ORDER BY id DESC';
-        const dbRes = await (0, pool_1.query)(sql, params);
-        return res.json({ status: true, ledgers: dbRes.rows });
-    }
-    catch (err) {
-        let filtered = [...memoryLedgers];
-        if (user?.role === 'USER') {
-            const pStr = user.name.toLowerCase();
-            filtered = filtered.filter(l => l.party_name.toLowerCase().includes(pStr));
-        }
-        else if (party_name) {
-            const pStr = String(party_name).toLowerCase();
-            filtered = filtered.filter(l => l.party_name.toLowerCase().includes(pStr));
-        }
-        return res.json({ status: true, ledgers: filtered });
-    }
-};
-exports.getPartyLedger = getPartyLedger;
-const getOutstandingSummary = async (req, res) => {
-    const user = req.user;
+    let allLedgers = [];
     try {
         let sql = `
-      SELECT 
-        party_name,
-        SUM(CASE WHEN account_type = 'DEBIT' THEN amount ELSE 0 END) as total_debit,
-        SUM(CASE WHEN account_type = 'CREDIT' THEN amount ELSE 0 END) as total_credit,
-        (SUM(CASE WHEN account_type = 'DEBIT' THEN amount ELSE 0 END) - SUM(CASE WHEN account_type = 'CREDIT' THEN amount ELSE 0 END)) as outstanding_balance
-      FROM ledgers
+      SELECT l.*, b.builty_number, b.receiver_mobile, b.receiver_name
+      FROM ledgers l
+      LEFT JOIN builtys b ON l.builty_id = b.id
+      WHERE 1=1
     `;
         const params = [];
         if (user?.role === 'USER') {
-            params.push(`%${user.name}%`);
-            sql += ` WHERE party_name ILIKE $1`;
+            params.push(`%${user.mobile || user.name}%`);
+            sql += ` AND (l.party_name ILIKE $${params.length} OR l.receiver_mobile ILIKE $${params.length})`;
         }
-        sql += ` GROUP BY party_name`;
+        else if (mobile) {
+            params.push(`%${mobile}%`);
+            sql += ` AND (l.receiver_mobile ILIKE $${params.length} OR b.receiver_mobile ILIKE $${params.length})`;
+        }
+        else if (party_name) {
+            params.push(`%${party_name}%`);
+            sql += ` AND (l.party_name ILIKE $${params.length} OR l.receiver_mobile ILIKE $${params.length})`;
+        }
+        if (start_date && end_date) {
+            params.push(start_date, end_date);
+            sql += ` AND DATE(l.created_at) BETWEEN $${params.length - 1} AND $${params.length}`;
+        }
+        sql += ' ORDER BY l.id ASC';
         const dbRes = await (0, pool_1.query)(sql, params);
-        return res.json({ status: true, party_summaries: dbRes.rows });
+        allLedgers = [...dbRes.rows];
     }
     catch (err) {
-        const map = {};
-        memoryLedgers.forEach(l => {
-            if (user?.role === 'USER' && !l.party_name.toLowerCase().includes(user.name.toLowerCase())) {
-                return;
-            }
-            if (!map[l.party_name]) {
-                map[l.party_name] = { party_name: l.party_name, total_debit: 0, total_credit: 0, outstanding_balance: 0 };
-            }
-            if (l.account_type === 'DEBIT')
-                map[l.party_name].total_debit += l.amount;
-            if (l.account_type === 'CREDIT')
-                map[l.party_name].total_credit += l.amount;
-            map[l.party_name].outstanding_balance = map[l.party_name].total_debit - map[l.party_name].total_credit;
-        });
-        return res.json({ status: true, party_summaries: Object.values(map) });
+        allLedgers = [];
     }
+    // Include memoryLedgers fallback
+    let filteredMem = [...exports.memoryLedgers];
+    if (mobile) {
+        const mStr = String(mobile);
+        filteredMem = filteredMem.filter(l => (l.receiver_mobile || '').includes(mStr));
+    }
+    else if (party_name) {
+        const pStr = String(party_name).toLowerCase();
+        filteredMem = filteredMem.filter(l => l.party_name.toLowerCase().includes(pStr));
+    }
+    const combined = [...allLedgers, ...filteredMem];
+    // Calculate running balance for each party
+    let runningBalance = 0;
+    const enrichedLedgers = combined.map(row => {
+        const amt = parseFloat(row.amount || '0');
+        if (row.account_type === 'DEBIT') {
+            runningBalance += amt;
+        }
+        else if (row.account_type === 'CREDIT') {
+            runningBalance -= amt;
+        }
+        return {
+            ...row,
+            running_balance: runningBalance,
+        };
+    });
+    return res.json({ status: true, ledgers: enrichedLedgers.reverse() });
+};
+exports.getPartyLedger = getPartyLedger;
+const getOutstandingSummary = async (req, res) => {
+    const { search, mobile, start_date, end_date } = req.query;
+    const user = req.user;
+    let dbParties = [];
+    try {
+        // Party-indexed ledger summary: Clean aggregation for both Sender and Receiver party accounts
+        let sql = `
+      SELECT 
+        l.party_name as ledger_key,
+        l.party_name as party_name,
+        COALESCE(MAX(l.receiver_mobile), MAX(b.receiver_mobile), '') as receiver_mobile,
+        COUNT(DISTINCT l.builty_id) as total_bookings,
+        COALESCE(SUM(CASE WHEN l.account_type = 'DEBIT' THEN l.amount ELSE 0 END), 0) as total_debit,
+        COALESCE(SUM(CASE WHEN l.account_type = 'CREDIT' THEN l.amount ELSE 0 END), 0) as total_credit,
+        COALESCE((SUM(CASE WHEN l.account_type = 'DEBIT' THEN l.amount ELSE 0 END) - SUM(CASE WHEN l.account_type = 'CREDIT' THEN l.amount ELSE 0 END)), 0) as outstanding_balance,
+        MAX(l.created_at) as last_activity_date
+      FROM ledgers l
+      LEFT JOIN builtys b ON l.builty_id = b.id
+      WHERE 1=1
+    `;
+        const params = [];
+        if (user?.role === 'USER') {
+            params.push(`%${user.mobile || user.name}%`);
+            sql += ` AND (l.party_name ILIKE $1 OR l.receiver_mobile ILIKE $1)`;
+        }
+        else if (mobile) {
+            params.push(`%${mobile}%`);
+            sql += ` AND (l.receiver_mobile ILIKE $1 OR b.receiver_mobile ILIKE $1)`;
+        }
+        else if (search) {
+            params.push(`%${search}%`);
+            sql += ` AND (l.party_name ILIKE $1 OR l.receiver_mobile ILIKE $1)`;
+        }
+        if (start_date && end_date) {
+            params.push(start_date, end_date);
+            sql += ` AND DATE(l.created_at) BETWEEN $${params.length - 1} AND $${params.length}`;
+        }
+        sql += ` GROUP BY l.party_name ORDER BY outstanding_balance DESC`;
+        const dbRes = await (0, pool_1.query)(sql, params);
+        dbParties = dbRes.rows;
+    }
+    catch (err) {
+        dbParties = [];
+    }
+    // Process memoryLedgers
+    const map = {};
+    dbParties.forEach(p => {
+        map[p.ledger_key] = {
+            party_name: p.party_name,
+            receiver_mobile: p.receiver_mobile,
+            total_bookings: parseInt(p.total_bookings || '1'),
+            total_debit: parseFloat(p.total_debit || '0'),
+            total_credit: parseFloat(p.total_credit || '0'),
+            outstanding_balance: parseFloat(p.outstanding_balance || '0'),
+            last_activity_date: p.last_activity_date,
+        };
+    });
+    exports.memoryLedgers.forEach(l => {
+        const key = l.receiver_mobile || l.party_name;
+        if (!map[key]) {
+            map[key] = {
+                party_name: l.party_name,
+                receiver_mobile: l.receiver_mobile || '',
+                total_bookings: 1,
+                total_debit: 0,
+                total_credit: 0,
+                outstanding_balance: 0,
+                last_activity_date: l.created_at,
+            };
+        }
+        const amt = parseFloat(l.amount || '0');
+        if (l.account_type === 'DEBIT')
+            map[key].total_debit += amt;
+        if (l.account_type === 'CREDIT')
+            map[key].total_credit += amt;
+        map[key].outstanding_balance = map[key].total_debit - map[key].total_credit;
+    });
+    const partySummaries = Object.values(map);
+    let overallBilled = 0.0;
+    let overallReceived = 0.0;
+    let overallPending = 0.0;
+    partySummaries.forEach((p) => {
+        overallBilled += p.total_debit;
+        overallReceived += p.total_credit;
+        overallPending += p.outstanding_balance;
+    });
+    return res.json({
+        status: true,
+        party_summaries: partySummaries,
+        executive_summary: {
+            total_parties: partySummaries.length,
+            overall_billed: overallBilled,
+            overall_received: overallReceived,
+            overall_pending: overallPending,
+        },
+    });
 };
 exports.getOutstandingSummary = getOutstandingSummary;
 const addPaymentEntry = async (req, res) => {
-    const { party_name, builty_id, account_type, amount, payment_method, remarks } = req.body;
-    if (!party_name || !account_type || !amount) {
-        return res.status(400).json({ status: false, message: 'Party Name, Account Type, and Amount are required' });
+    const { party_name, builty_id, account_type, amount, payment_method, reference_number, remarks } = req.body;
+    if (!party_name || !amount) {
+        return res.status(400).json({ status: false, message: 'Party Name and Amount are required' });
     }
     const amt = parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) {
+        return res.status(400).json({ status: false, message: 'Amount must be a valid positive number' });
+    }
+    const accType = account_type || 'CREDIT'; // Default payment entry is CREDIT
+    const payMethod = payment_method || 'CASH';
+    const refNo = reference_number ? String(reference_number).trim() : '';
+    const notes = remarks ? String(remarks).trim() : 'Payment received';
+    const collector = req.user ? `${req.user.name} (${req.user.role})` : 'Branch Cashier';
+    let client;
     try {
-        const insertRes = await (0, pool_1.query)('INSERT INTO ledgers (party_name, builty_id, account_type, amount, balance, payment_method, remarks) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *', [party_name, builty_id || null, account_type, amt, amt, payment_method || 'CASH', remarks || '']);
-        return res.json({ status: true, message: 'Ledger entry recorded', ledger: insertRes.rows[0] });
+        client = await (0, pool_1.getClient)();
+        await client.query('BEGIN');
+        // 1. Insert Ledger Entry with collected_by
+        const insertRes = await client.query('INSERT INTO ledgers (party_name, builty_id, account_type, amount, balance, payment_method, reference_number, collected_by, remarks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *', [party_name, builty_id || null, accType, amt, amt, payMethod, refNo, collector, notes]);
+        // 2. If linked to a specific builty_id, update builtys table paid_amount, pending_amount, & payment_status
+        if (builty_id && accType === 'CREDIT') {
+            const builtyRes = await client.query('SELECT * FROM builtys WHERE id = $1 FOR UPDATE', [builty_id]);
+            if (builtyRes.rows.length > 0) {
+                const builty = builtyRes.rows[0];
+                const newPaid = parseFloat(builty.paid_amount || '0') + amt;
+                const totalBilled = parseFloat(builty.builty_amount || '0');
+                const newPending = Math.max(0, totalBilled - newPaid);
+                const newPaymentStatus = newPending <= 0 ? 'FULLY_PAID' : (newPaid > 0 ? 'PARTIALLY_PAID' : 'PENDING');
+                await client.query('UPDATE builtys SET paid_amount = $1, pending_amount = $2, payment_status = $3, updated_at = NOW() WHERE id = $4', [newPaid, newPending, newPaymentStatus, builty_id]);
+            }
+        }
+        await client.query('COMMIT');
+        client.release();
+        return res.json({
+            status: true,
+            message: 'Payment entry recorded successfully',
+            ledger: insertRes.rows[0],
+        });
     }
     catch (err) {
+        if (client) {
+            await client.query('ROLLBACK');
+            client.release();
+        }
         const newLedger = {
-            id: memoryLedgers.length + 1,
+            id: exports.memoryLedgers.length + 1,
             party_name,
             builty_id: builty_id || null,
-            account_type,
+            account_type: accType,
             amount: amt,
             balance: amt,
-            payment_method: payment_method || 'CASH',
-            remarks: remarks || '',
-            created_at: new Date().toISOString()
+            payment_method: payMethod,
+            reference_number: refNo,
+            collected_by: collector,
+            remarks: notes,
+            created_at: new Date().toISOString(),
         };
-        memoryLedgers.push(newLedger);
-        return res.json({ status: true, message: 'Ledger entry recorded', ledger: newLedger });
+        exports.memoryLedgers.push(newLedger);
+        return res.json({
+            status: true,
+            message: 'Payment entry recorded successfully',
+            ledger: newLedger,
+        });
     }
 };
 exports.addPaymentEntry = addPaymentEntry;

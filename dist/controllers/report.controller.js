@@ -8,9 +8,9 @@ const getProfitAndLossReport = async (req, res) => {
         let incomeQuery = 'SELECT COALESCE(SUM(builty_amount + charges - discount), 0) as total_income FROM builtys WHERE 1=1';
         let expenseQuery = 'SELECT COALESCE(SUM(amount), 0) as total_expense FROM expenses WHERE 1=1';
         const params = [];
-        if (branch_id) {
+        if (branch_id && branch_id !== 'ALL' && branch_id !== 'all') {
             params.push(branch_id);
-            incomeQuery += ` AND branch_id = $${params.length}`;
+            incomeQuery += ` AND (branch_id = $${params.length} OR destination_branch_id = $${params.length})`;
             expenseQuery += ` AND branch_id = $${params.length}`;
         }
         if (start_date && end_date) {
@@ -47,11 +47,34 @@ const getProfitAndLossReport = async (req, res) => {
 };
 exports.getProfitAndLossReport = getProfitAndLossReport;
 const getDashboardStats = async (req, res) => {
+    const { branch_id } = req.query;
+    const user = req.user;
     try {
-        const totalRes = await (0, pool_1.query)('SELECT COUNT(*) FROM builtys');
-        const todayRes = await (0, pool_1.query)('SELECT COUNT(*) FROM builtys WHERE DATE(created_at) = CURRENT_DATE');
-        const pendingRes = await (0, pool_1.query)("SELECT COUNT(*) FROM builtys WHERE status = 'PENDING'");
-        const completedRes = await (0, pool_1.query)("SELECT COUNT(*) FROM builtys WHERE status = 'DELIVERED'");
+        let whereClause = ' WHERE 1=1';
+        const params = [];
+        let targetBranchId = branch_id;
+        let targetCity = null;
+        if (user?.role === 'SUB_ADMIN') {
+            const userRes = await (0, pool_1.query)('SELECT u.branch_id, b.city FROM users u LEFT JOIN branches b ON u.branch_id = b.id WHERE u.id = $1', [user.id]);
+            if (userRes.rows.length > 0) {
+                targetBranchId = userRes.rows[0].branch_id;
+                targetCity = userRes.rows[0].city;
+            }
+            if (!targetBranchId && user.branch_id) {
+                targetBranchId = user.branch_id;
+            }
+        }
+        if (targetBranchId && targetBranchId !== 'ALL' && targetBranchId !== 'all') {
+            params.push(targetBranchId);
+            const p1 = params.length;
+            params.push(targetCity ? `%${targetCity}%` : '___NONE___');
+            const p2 = params.length;
+            whereClause += ` AND (branch_id = $${p1} OR destination_branch_id = $${p1} OR source_city ILIKE $${p2} OR destination_city ILIKE $${p2})`;
+        }
+        const totalRes = await (0, pool_1.query)(`SELECT COUNT(*) FROM builtys${whereClause}`, params);
+        const todayRes = await (0, pool_1.query)(`SELECT COUNT(*) FROM builtys${whereClause} AND DATE(created_at) = CURRENT_DATE`, params);
+        const pendingRes = await (0, pool_1.query)(`SELECT COUNT(*) FROM builtys${whereClause} AND status = 'PENDING'`, params);
+        const completedRes = await (0, pool_1.query)(`SELECT COUNT(*) FROM builtys${whereClause} AND status = 'DELIVERED'`, params);
         return res.json({
             status: true,
             stats: {
