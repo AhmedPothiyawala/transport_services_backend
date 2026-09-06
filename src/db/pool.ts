@@ -3,10 +3,18 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const LIVE_NEON_DATABASE_URL =
+  'postgresql://neondb_owner:npg_dqFic0Y9SPLA@ep-still-dust-ay69k9w6.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require';
+
+const shouldUseCloudDb =
+  !!process.env.DATABASE_URL ||
+  process.env.NODE_ENV === 'production' ||
+  !process.env.DB_HOST;
+
 export const pool = new Pool(
-  process.env.DATABASE_URL
+  shouldUseCloudDb
     ? {
-        connectionString: process.env.DATABASE_URL,
+        connectionString: process.env.DATABASE_URL || LIVE_NEON_DATABASE_URL,
         ssl: { rejectUnauthorized: false },
         max: 20,
         idleTimeoutMillis: 30000,
