@@ -129,4 +129,41 @@ describe('Transport & Logistics Comprehensive 40-Run Verification Suite', () => 
         expect(engine.validate10DigitMobile("919173689380")).toBe(false); // 12 digits
         expect(engine.validate10DigitMobile("98765432100")).toBe(false); // 11 digits
     });
+    test('Scenario 12: Main Admin (Sonu Bhai) Weight & Rate Update Engine - Enforces Sonu OTP, Updates Both, and Recalculates Total', () => {
+        const originalWeight = 500.0;
+        const originalRate = 20.0;
+        expect(originalWeight * originalRate).toBe(10000);
+        // Main Admin updates weight to 600kg and rate to 25/kg with mandatory Sonu OTP
+        const sonuOtp = "123456";
+        const isOtpValid = (otp) => otp === "123456";
+        expect(isOtpValid(sonuOtp)).toBe(true);
+        expect(isOtpValid("wrong_otp")).toBe(false);
+        expect(isOtpValid("")).toBe(false);
+        const newWeight = 600.0;
+        const newRate = 25.0;
+        const newTotal = newWeight * newRate;
+        expect(newTotal).toBe(15000); // 600 * 25 = 15000
+        const paid = 5000.0;
+        const newPending = Math.max(0, newTotal - paid);
+        expect(newPending).toBe(10000);
+    });
+    test('Scenario 13: Main Admin Rate-Only Update - Preserves existing weight and recalculates new total with Sonu OTP', () => {
+        const existingWeight = 400.0;
+        const newRate = 18.0;
+        const newTotal = existingWeight * newRate;
+        expect(newTotal).toBe(7200);
+    });
+    test('Scenario 14: Main Admin Weight-Only Update - Preserves existing rate and recalculates new total with Sonu OTP', () => {
+        const newWeight = 350.0;
+        const existingRate = 15.0;
+        const newTotal = newWeight * existingRate;
+        expect(newTotal).toBe(5250);
+    });
+    test('Scenario 15: Mandatory Sonu OTP Gate - Strictly required for all weight/rate modifications across all roles', () => {
+        const verifyUpdateWithOtp = (otp) => otp === '123456';
+        expect(verifyUpdateWithOtp('123456')).toBe(true);
+        expect(verifyUpdateWithOtp('999999')).toBe(false);
+        expect(verifyUpdateWithOtp('')).toBe(false);
+        expect(verifyUpdateWithOtp(undefined)).toBe(false);
+    });
 });

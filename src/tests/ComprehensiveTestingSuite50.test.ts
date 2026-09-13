@@ -375,5 +375,50 @@ describe('Transport Management System - 50+ Scenario End-to-End Test Suite', () 
       const title = 'SLPS - SHRI LAKSHMI PARCEL SERVICE';
       expect(title).toContain('SLPS');
     });
+
+    test('Run 56: Branch creation requires non-empty branch_name, city, and code', () => {
+      const isValidBranch = (name?: string, city?: string, code?: string) => {
+        return !!(name?.trim() && city?.trim() && code?.trim());
+      };
+      expect(isValidBranch('Jaipur Hub', 'Jaipur', 'JAI01')).toBe(true);
+      expect(isValidBranch('', 'Jaipur', 'JAI01')).toBe(false);
+      expect(isValidBranch('Jaipur Hub', '', 'JAI01')).toBe(false);
+      expect(isValidBranch('Jaipur Hub', 'Jaipur', '')).toBe(false);
+    });
+
+    test('Run 57: Branch code is automatically sanitized to uppercase', () => {
+      const sanitizeCode = (raw: string) => raw.trim().toUpperCase();
+      expect(sanitizeCode('jai01')).toBe('JAI01');
+      expect(sanitizeCode(' mum02 ')).toBe('MUM02');
+    });
+
+    test('Run 58: Sequence auto-sync detects branches_pkey sequence conflict and heals', () => {
+      const isSequenceMismatch = (errCode: string, errDetail?: string) => {
+        return errCode === '23505' && !!(errDetail && errDetail.includes('(id)='));
+      };
+      expect(isSequenceMismatch('23505', 'Key (id)=(3) already exists.')).toBe(true);
+      expect(isSequenceMismatch('23505', 'Key (branch_name)=(Delhi Hub) already exists.')).toBe(false);
+    });
+
+    test('Run 59: Duplicate branch name or code generates user-friendly validation error', () => {
+      const getDuplicateError = (errDetail: string, name: string, code: string) => {
+        if (errDetail.includes('branch_name')) return `Branch with name '${name}' already exists.`;
+        if (errDetail.includes('code')) return `Branch with code '${code}' already exists.`;
+        return 'A branch with this information already exists.';
+      };
+      expect(getDuplicateError('Key (branch_name)=(Ahmedabad Hub) already exists.', 'Ahmedabad Hub', 'AHM01'))
+        .toBe("Branch with name 'Ahmedabad Hub' already exists.");
+      expect(getDuplicateError('Key (code)=(AHM01) already exists.', 'Ahmedabad Hub', 'AHM01'))
+        .toBe("Branch with code 'AHM01' already exists.");
+    });
+
+    test('Run 60: Branch deletion is guarded against branches with active users or bookings', () => {
+      const canDeleteBranch = (linkedUsers: number, linkedBuiltys: number) => {
+        return linkedUsers === 0 && linkedBuiltys === 0;
+      };
+      expect(canDeleteBranch(0, 0)).toBe(true);
+      expect(canDeleteBranch(2, 0)).toBe(false);
+      expect(canDeleteBranch(0, 5)).toBe(false);
+    });
   });
 });

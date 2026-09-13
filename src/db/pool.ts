@@ -16,9 +16,10 @@ export const pool = new Pool(
     ? {
         connectionString: process.env.DATABASE_URL || LIVE_NEON_DATABASE_URL,
         ssl: { rejectUnauthorized: false },
-        max: 20,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 10000,
+        max: parseInt(process.env.DB_POOL_MAX || '50', 10),
+        idleTimeoutMillis: 15000,
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 8000, // 8s max query timeout to prevent hung connections
       }
     : {
         host: process.env.DB_HOST || 'localhost',
@@ -26,15 +27,21 @@ export const pool = new Pool(
         database: process.env.DB_NAME || 'transport_db',
         user: process.env.DB_USER || 'postgres',
         password: process.env.DB_PASSWORD || 'postgres',
-        max: 20,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 2000,
+        max: parseInt(process.env.DB_POOL_MAX || '50', 10),
+        idleTimeoutMillis: 15000,
+        connectionTimeoutMillis: 3000,
+        statement_timeout: 8000,
       }
 );
 
 export const query = async (text: string, params?: any[]) => {
+  const start = Date.now();
   try {
     const res = await pool.query(text, params);
+    const duration = Date.now() - start;
+    if (duration > 500) {
+      console.warn(`[High-Load Warning] Query took ${duration}ms: ${text.slice(0, 100)}...`);
+    }
     return res;
   } catch (error) {
     console.warn(`[DB Query Error / Fallback Mode]: ${error}`);

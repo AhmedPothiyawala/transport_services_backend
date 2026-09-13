@@ -37,7 +37,19 @@ const rateLimiter = (req, res, next) => {
     current.count++;
     next();
 };
-app.use((0, cors_1.default)());
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Dynamically allow requesting origin for Flutter Web, mobile, and dev clients
+        callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin', 'X-App-Client-Token'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400,
+};
+app.use((0, cors_1.default)(corsOptions));
+app.options('*', (0, cors_1.default)(corsOptions));
 app.use(express_1.default.json({ limit: '10mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
 // Apply Rate Limiter to Auth Endpoints
@@ -47,8 +59,9 @@ app.use('/api/v1/auth/register', rateLimiter);
 app.get('/health', (req, res) => {
     res.json({ status: true, message: 'Transport Management Backend API is running securely.' });
 });
-// API v1 Routes
-app.use('/api/v1', api_routes_1.default);
+// API v1 Routes guarded with Client Integrity & Anti-Postman Protection
+const clientIntegrity_1 = require("./middleware/clientIntegrity");
+app.use('/api/v1', clientIntegrity_1.clientIntegrityGuard, api_routes_1.default);
 // Central Error Handler with Sanitized Output
 app.use((err, req, res, next) => {
     console.error('[Backend Security Log - Error]:', err.stack);

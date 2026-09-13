@@ -26,6 +26,8 @@ router.post('/auth/sonu-otp/verify', auth_controller_1.verifySonuOtp);
 // Party Management (Unified Consignor & Consignee DB)
 router.post('/parties', auth_1.authenticate, party_controller_1.createParty);
 router.get('/parties', auth_1.authenticate, party_controller_1.getParties);
+router.put('/parties/:id', auth_1.authenticate, party_controller_1.updateParty);
+router.put('/parties/:id/status', auth_1.authenticate, party_controller_1.togglePartyStatus);
 // Branch Management (Main Admin for mutation, Public for listing)
 router.post('/branches', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN']), branch_controller_1.createBranch);
 router.get('/branches', branch_controller_1.getBranches);
@@ -38,13 +40,17 @@ router.put('/builty/:id/driver-status', auth_1.authenticate, (0, auth_1.authoriz
 router.put('/builty/:id/admin-update', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN']), builty_controller_1.updateAdminBooking);
 router.put('/builty/:id/split-delivery', auth_1.authenticate, (0, auth_1.authorize)(['DRIVER', 'SUB_ADMIN', 'MAIN_ADMIN', 'USER']), builty_controller_1.processSplitDelivery);
 router.get('/builty/:id/delivery-logs', auth_1.authenticate, builty_controller_1.getDeliveryLogs);
+router.get('/builty/delivery-logs/all', auth_1.authenticate, builty_controller_1.getAllDeliveryLogs);
+// Status Update via Verification Code
+router.post('/builty/verify-code', auth_1.authenticate, builty_controller_1.verifyCodeForStatusUpdate);
+router.post('/builty/update-status-by-code', auth_1.authenticate, builty_controller_1.updateStatusByCode);
 // Ledgers & Outstanding Amounts
 router.get('/ledger/party', auth_1.authenticate, ledger_controller_1.getPartyLedger);
 router.get('/ledger/outstanding', auth_1.authenticate, ledger_controller_1.getOutstandingSummary);
 router.post('/ledger/entry', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN', 'USER']), ledger_controller_1.addPaymentEntry);
 // Branch Expense Management
 router.post('/expenses', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), expense_controller_1.addExpense);
-router.get('/expenses', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), expense_controller_1.getExpenses);
+router.get('/expenses', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN', 'USER']), expense_controller_1.getExpenses);
 // Branch Employee Debt & Salary Management
 router.post('/employees', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), employee_controller_1.createEmployee);
 router.get('/employees', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), employee_controller_1.getEmployees);
@@ -52,8 +58,9 @@ router.put('/employees/:id', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_A
 // Reports & Dashboard Stats
 router.get('/reports/profit-loss', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN']), report_controller_1.getProfitAndLossReport);
 router.get('/reports/dashboard-stats', auth_1.authenticate, report_controller_1.getDashboardStats);
-// Sub Admin & User Management
+// Sub Admin, Customer & User Management
 router.post('/admin/sub-admin', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN']), admin_controller_1.createSubAdmin);
+router.post('/admin/customer', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), admin_controller_1.createCustomer);
 router.get('/admin/users', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), admin_controller_1.getUsersList);
 router.post('/admin/user-status', auth_1.authenticate, (0, auth_1.authorize)(['MAIN_ADMIN', 'SUB_ADMIN']), auth_controller_1.toggleUserActiveStatus);
 exports.default = router;

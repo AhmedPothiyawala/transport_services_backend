@@ -3,9 +3,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.authorize = exports.authenticate = void 0;
+exports.authorize = exports.authenticate = exports.invalidateUserSessionCache = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const JWT_SECRET = process.env.JWT_SECRET || 'transport_management_super_secret_jwt_key_2026';
+const userStatusCache = new Map();
+const CACHE_TTL_MS = 60 * 1000; // 60 seconds TTL
+const invalidateUserSessionCache = (userId) => {
+    if (userId) {
+        userStatusCache.delete(userId);
+    }
+    else {
+        userStatusCache.clear();
+    }
+};
+exports.invalidateUserSessionCache = invalidateUserSessionCache;
 /**
  * Giant Security Middleware: JWT Authentication & Signature Validation
  */
@@ -21,18 +32,35 @@ const authenticate = async (req, res, next) => {
         if (!decoded || !decoded.id || !decoded.role) {
             return res.status(401).json({ status: false, message: 'Access Denied: Invalid token claims' });
         }
-        // Instant Deactivation & Real-time Session Revocation Check
+        // Fast In-Memory Cache Check for Deactivation & Session Revocation (300k scale optimization)
         try {
-            const { query } = require('../db/pool');
-            const userRes = await query('SELECT is_active, session_version FROM users WHERE id = $1', [decoded.id]);
-            if (userRes && userRes.rows.length > 0) {
-                const u = userRes.rows[0];
-                if (u.is_active === false) {
-                    return res.status(403).json({ status: false, message: 'Your account has been deactivated. Access revoked.' });
+            const now = Date.now();
+            const cached = userStatusCache.get(decoded.id);
+            let isActive = true;
+            let sessionVersion = decoded.session_version;
+            if (cached && (now - cached.cachedAt < CACHE_TTL_MS)) {
+                isActive = cached.isActive;
+                sessionVersion = cached.sessionVersion;
+            }
+            else {
+                const { query } = require('../db/pool');
+                const userRes = await query('SELECT is_active, session_version FROM users WHERE id = $1', [decoded.id]);
+                if (userRes && userRes.rows.length > 0) {
+                    const u = userRes.rows[0];
+                    isActive = u.is_active !== false;
+                    sessionVersion = u.session_version;
+                    userStatusCache.set(decoded.id, {
+                        isActive,
+                        sessionVersion,
+                        cachedAt: now,
+                    });
                 }
-                if (decoded.session_version !== undefined && u.session_version !== decoded.session_version) {
-                    return res.status(401).json({ status: false, message: 'Session expired due to account status change. Please log in again.' });
-                }
+            }
+            if (!isActive) {
+                return res.status(403).json({ status: false, message: 'Your account has been deactivated. Access revoked.' });
+            }
+            if (decoded.session_version !== undefined && sessionVersion !== decoded.session_version) {
+                return res.status(401).json({ status: false, message: 'Session expired due to account status change. Please log in again.' });
             }
         }
         catch (_) {

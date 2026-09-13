@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     builty_id INT REFERENCES builtys(id) ON DELETE CASCADE,
     branch_id INT REFERENCES branches(id) ON DELETE CASCADE,
     sub_admin_id INT REFERENCES users(id) ON DELETE SET NULL,
+    customer_id INT REFERENCES users(id) ON DELETE SET NULL,
     expense_title VARCHAR(255) NOT NULL,
     category VARCHAR(100) DEFAULT 'MISC',
     amount NUMERIC(12,2) NOT NULL,
@@ -152,6 +153,14 @@ CREATE TABLE IF NOT EXISTS expenses (
 );
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'MISC';
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS sub_admin_id INT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS customer_id INT REFERENCES users(id) ON DELETE SET NULL;
+
+-- Ensure branch & active columns exist on parties
+ALTER TABLE parties ADD COLUMN IF NOT EXISTS branch_id INT REFERENCES branches(id) ON DELETE SET NULL;
+ALTER TABLE parties ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+
+-- Ensure status column exists on delivery_logs
+ALTER TABLE delivery_logs ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'DELIVERED';
 
 -- Ensure branch columns exist on users and builtys tables
 ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INT REFERENCES branches(id) ON DELETE SET NULL;
@@ -166,10 +175,13 @@ VALUES
   (4, 'Mumbai Hub', 'Mumbai', 'MUM01')
 ON CONFLICT (id) DO UPDATE SET branch_name = EXCLUDED.branch_name, city = EXCLUDED.city, code = EXCLUDED.code;
 
--- Seed Only Main Admin User (Default Password: "123456")
+-- Ensure branches sequence is synchronized with seeded IDs to prevent duplicate key errors
+SELECT setval('branches_id_seq', COALESCE((SELECT MAX(id) FROM branches), 1));
+
+-- Seed Only Main Admin User (Password: "Arp@78692")
 INSERT INTO users (name, mobile, address, role, branch_id, password_hash, otp) 
 VALUES 
-  ('Sonu Sir (Main Admin)', '9999999999', 'Headquarters, Ahmedabad', 'MAIN_ADMIN', NULL, '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', '123456')
+  ('Sonu Sir (Main Admin)', '9999999999', 'Headquarters, Ahmedabad', 'MAIN_ADMIN', NULL, '$2a$10$DmKZYsULTzgBsCLQEplwPeRPdcxC0wkukOYewP9lUJRsm4wm7d552', '123456')
 ON CONFLICT (mobile) DO UPDATE SET password_hash = EXCLUDED.password_hash, branch_id = EXCLUDED.branch_id;
 
 -- Database Performance Indexes for High-Speed Query Optimization
@@ -178,12 +190,38 @@ CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_branch_id ON users(branch_id);
 CREATE INDEX IF NOT EXISTS idx_parties_mobile ON parties(mobile);
 CREATE INDEX IF NOT EXISTS idx_parties_name ON parties(name);
+CREATE INDEX IF NOT EXISTS idx_parties_branch_id ON parties(branch_id);
+CREATE INDEX IF NOT EXISTS idx_parties_is_active ON parties(is_active);
 CREATE INDEX IF NOT EXISTS idx_builtys_party_name ON builtys(party_name);
 CREATE INDEX IF NOT EXISTS idx_builtys_branch_id ON builtys(branch_id);
 CREATE INDEX IF NOT EXISTS idx_builtys_destination_branch_id ON builtys(destination_branch_id);
 CREATE INDEX IF NOT EXISTS idx_builtys_user_id ON builtys(user_id);
 CREATE INDEX IF NOT EXISTS idx_builtys_created_at ON builtys(created_at);
 CREATE INDEX IF NOT EXISTS idx_builtys_payment_status ON builtys(payment_status);
+CREATE INDEX IF NOT EXISTS idx_builtys_status ON builtys(status);
+CREATE INDEX IF NOT EXISTS idx_builtys_delivery_security_code ON builtys(delivery_security_code);
 CREATE INDEX IF NOT EXISTS idx_ledgers_party_name ON ledgers(party_name);
 CREATE INDEX IF NOT EXISTS idx_ledgers_builty_id ON ledgers(builty_id);
 CREATE INDEX IF NOT EXISTS idx_ledgers_created_at ON ledgers(created_at);
+CREATE INDEX IF NOT EXISTS idx_expenses_customer_id ON expenses(customer_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_branch_id ON expenses(branch_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_delivery_logs_delivered_at ON delivery_logs(delivered_at);
+CREATE INDEX IF NOT EXISTS idx_delivery_logs_builty_id ON delivery_logs(builty_id);
+
+-- High-Load Compound Indexes for 300,000 Entries / Day Scale ($O(\log N)$)
+CREATE INDEX IF NOT EXISTS idx_builtys_branch_created ON builtys(branch_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builtys_dest_branch_created ON builtys(destination_branch_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builtys_user_created ON builtys(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builtys_party_created ON builtys(party_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builtys_receiver_mobile ON builtys(receiver_mobile);
+CREATE INDEX IF NOT EXISTS idx_builtys_sender_mobile ON builtys(sender_mobile);
+CREATE INDEX IF NOT EXISTS idx_delivery_logs_composite ON delivery_logs(delivered_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_ledgers_party_created ON ledgers(party_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ledgers_receiver_mobile ON ledgers(receiver_mobile);
+CREATE INDEX IF NOT EXISTS idx_expenses_branch_date ON expenses(branch_id, expense_date DESC);
+CREATE INDEX IF NOT EXISTS idx_expenses_customer_date ON expenses(customer_id, expense_date DESC);
+CREATE INDEX IF NOT EXISTS idx_parties_branch_name ON parties(branch_id, name);
+CREATE INDEX IF NOT EXISTS idx_parties_branch_mobile ON parties(branch_id, mobile);
+
+

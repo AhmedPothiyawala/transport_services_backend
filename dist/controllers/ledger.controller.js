@@ -28,43 +28,52 @@ const getPartyLedger = async (req, res) => {
             sql += ` AND (l.party_name ILIKE $${params.length} OR l.receiver_mobile ILIKE $${params.length})`;
         }
         if (start_date && end_date) {
-            params.push(start_date, end_date);
-            sql += ` AND DATE(l.created_at) BETWEEN $${params.length - 1} AND $${params.length}`;
+            params.push(`${start_date} 00:00:00`, `${end_date} 23:59:59.999`);
+            sql += ` AND l.created_at >= $${params.length - 1} AND l.created_at <= $${params.length}`;
         }
-        sql += ' ORDER BY l.id ASC';
-        const dbRes = await (0, pool_1.query)(sql, params);
+        // High-Scale Universal Pagination
+        const pageNum = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+        const limitNum = Math.min(500, Math.max(1, parseInt(String(req.query.limit || '100'), 10) || 100));
+        const offset = (pageNum - 1) * limitNum;
+        const whereIndex = sql.indexOf('WHERE 1=1');
+        const whereClause = whereIndex !== -1 ? sql.slice(whereIndex) : 'WHERE 1=1';
+        const countSql = `SELECT COUNT(*) AS total FROM ledgers l LEFT JOIN builtys b ON l.builty_id = b.id ${whereClause}`;
+        const pagedSql = `${sql} ORDER BY l.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        const pagedParams = [...params, limitNum, offset];
+        const [countRes, dbRes] = await Promise.all([
+            (0, pool_1.query)(countSql, params).catch(() => ({ rows: [{ total: '0' }] })),
+            (0, pool_1.query)(pagedSql, pagedParams),
+        ]);
+        const totalCount = parseInt(countRes.rows[0]?.total || '0', 10) || dbRes.rows.length;
         allLedgers = [...dbRes.rows];
+        // Calculate running balance for each party
+        let runningBalance = 0;
+        const enrichedLedgers = allLedgers.map(row => {
+            const amt = parseFloat(row.amount || '0');
+            if (row.account_type === 'DEBIT') {
+                runningBalance += amt;
+            }
+            else if (row.account_type === 'CREDIT') {
+                runningBalance -= amt;
+            }
+            return {
+                ...row,
+                running_balance: runningBalance,
+            };
+        });
+        return res.json({
+            status: true,
+            total: totalCount,
+            page: pageNum,
+            limit: limitNum,
+            total_pages: Math.ceil(totalCount / limitNum),
+            ledgers: enrichedLedgers.reverse(),
+        });
     }
     catch (err) {
-        allLedgers = [];
+        let filteredMem = [...exports.memoryLedgers];
+        return res.json({ status: true, total: filteredMem.length, page: 1, limit: filteredMem.length, total_pages: 1, ledgers: filteredMem.reverse() });
     }
-    // Include memoryLedgers fallback
-    let filteredMem = [...exports.memoryLedgers];
-    if (mobile) {
-        const mStr = String(mobile);
-        filteredMem = filteredMem.filter(l => (l.receiver_mobile || '').includes(mStr));
-    }
-    else if (party_name) {
-        const pStr = String(party_name).toLowerCase();
-        filteredMem = filteredMem.filter(l => l.party_name.toLowerCase().includes(pStr));
-    }
-    const combined = [...allLedgers, ...filteredMem];
-    // Calculate running balance for each party
-    let runningBalance = 0;
-    const enrichedLedgers = combined.map(row => {
-        const amt = parseFloat(row.amount || '0');
-        if (row.account_type === 'DEBIT') {
-            runningBalance += amt;
-        }
-        else if (row.account_type === 'CREDIT') {
-            runningBalance -= amt;
-        }
-        return {
-            ...row,
-            running_balance: runningBalance,
-        };
-    });
-    return res.json({ status: true, ledgers: enrichedLedgers.reverse() });
 };
 exports.getPartyLedger = getPartyLedger;
 const getOutstandingSummary = async (req, res) => {
@@ -101,11 +110,16 @@ const getOutstandingSummary = async (req, res) => {
             sql += ` AND (l.party_name ILIKE $1 OR l.receiver_mobile ILIKE $1)`;
         }
         if (start_date && end_date) {
-            params.push(start_date, end_date);
-            sql += ` AND DATE(l.created_at) BETWEEN $${params.length - 1} AND $${params.length}`;
+            params.push(`${start_date} 00:00:00`, `${end_date} 23:59:59.999`);
+            sql += ` AND l.created_at >= $${params.length - 1} AND l.created_at <= $${params.length}`;
         }
         sql += ` GROUP BY l.party_name ORDER BY outstanding_balance DESC`;
-        const dbRes = await (0, pool_1.query)(sql, params);
+        const pageNum = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+        const limitNum = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+        const offset = (pageNum - 1) * limitNum;
+        const pagedSql = `${sql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        const pagedParams = [...params, limitNum, offset];
+        const dbRes = await (0, pool_1.query)(pagedSql, pagedParams);
         dbParties = dbRes.rows;
     }
     catch (err) {

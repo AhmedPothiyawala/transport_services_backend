@@ -183,10 +183,6 @@ const verifyOtpAndLogin = async (req, res) => {
         if (user.password_hash) {
             isPasswordValid = await bcryptjs_1.default.compare(password, user.password_hash);
         }
-        // Backup check for default test password "123456"
-        if (!isPasswordValid && password === '123456') {
-            isPasswordValid = true;
-        }
         if (!isPasswordValid) {
             // Record Failed Attempt
             const currentAttempts = (lockoutState?.attempts || 0) + 1;
@@ -334,14 +330,15 @@ const verifySonuOtp = async (req, res) => {
 };
 exports.verifySonuOtp = verifySonuOtp;
 const toggleUserActiveStatus = async (req, res) => {
-    const { target_user_id, is_active, sonu_otp } = req.body;
+    const { target_user_id, is_active, admin_otp, sonu_otp } = req.body;
     const caller = req.user;
     if (target_user_id === undefined || is_active === undefined) {
         return res.status(400).json({ status: false, message: 'target_user_id and is_active parameters are required' });
     }
-    // Sonu Bhai OTP mandatory check
-    if (!sonu_otp || sonu_otp !== '123456') {
-        return res.status(400).json({ status: false, message: 'Mandatory Sonu Bhai OTP verification failed or missing OTP code' });
+    // Sonu Bhai (Main Admin) OTP mandatory check
+    const otp = admin_otp || sonu_otp;
+    if (!otp || otp !== '123456') {
+        return res.status(400).json({ status: false, message: 'Mandatory Sonu Bhai (Main Admin) OTP verification is required to change user status.' });
     }
     try {
         const userRes = await (0, pool_1.query)('SELECT * FROM users WHERE id = $1', [target_user_id]);

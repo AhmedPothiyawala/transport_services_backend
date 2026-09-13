@@ -40,7 +40,20 @@ const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-app.use(cors());
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Dynamically allow requesting origin for Flutter Web, mobile, and dev clients
+    callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin', 'X-App-Client-Token'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -53,8 +66,9 @@ app.get('/health', (req: Request, res: Response) => {
   res.json({ status: true, message: 'Transport Management Backend API is running securely.' });
 });
 
-// API v1 Routes
-app.use('/api/v1', routes);
+// API v1 Routes guarded with Client Integrity & Anti-Postman Protection
+import { clientIntegrityGuard } from './middleware/clientIntegrity';
+app.use('/api/v1', clientIntegrityGuard, routes);
 
 // Central Error Handler with Sanitized Output
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {

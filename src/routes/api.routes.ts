@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { sendOtp, verifyOtpAndLogin, registerUser, updateProfile, deleteProfile, getProfile, sendSonuOtp, verifySonuOtp, toggleUserActiveStatus } from '../controllers/auth.controller';
 import { createBranch, getBranches, deleteBranch } from '../controllers/branch.controller';
-import { createParty, getParties } from '../controllers/party.controller';
+import { createParty, getParties, updateParty, togglePartyStatus } from '../controllers/party.controller';
 import {
   createBuilty,
   getBuiltyList,
@@ -10,11 +10,14 @@ import {
   updateAdminBooking,
   processSplitDelivery,
   getDeliveryLogs,
+  getAllDeliveryLogs,
+  verifyCodeForStatusUpdate,
+  updateStatusByCode,
 } from '../controllers/builty.controller';
 import { getPartyLedger, getOutstandingSummary, addPaymentEntry } from '../controllers/ledger.controller';
 import { addExpense, getExpenses } from '../controllers/expense.controller';
 import { getProfitAndLossReport, getDashboardStats } from '../controllers/report.controller';
-import { createSubAdmin, getUsersList } from '../controllers/admin.controller';
+import { createSubAdmin, createCustomer, getUsersList } from '../controllers/admin.controller';
 import { createEmployee, getEmployees, updateEmployeeDebtAndSalary } from '../controllers/employee.controller';
 import { authenticate, authorize } from '../middleware/auth';
 
@@ -36,6 +39,8 @@ router.post('/auth/sonu-otp/verify', verifySonuOtp);
 // Party Management (Unified Consignor & Consignee DB)
 router.post('/parties', authenticate, createParty);
 router.get('/parties', authenticate, getParties);
+router.put('/parties/:id', authenticate, updateParty);
+router.put('/parties/:id/status', authenticate, togglePartyStatus);
 
 // Branch Management (Main Admin for mutation, Public for listing)
 router.post('/branches', authenticate, authorize(['MAIN_ADMIN']), createBranch);
@@ -50,6 +55,11 @@ router.put('/builty/:id/driver-status', authenticate, authorize(['DRIVER', 'SUB_
 router.put('/builty/:id/admin-update', authenticate, authorize(['MAIN_ADMIN']), updateAdminBooking);
 router.put('/builty/:id/split-delivery', authenticate, authorize(['DRIVER', 'SUB_ADMIN', 'MAIN_ADMIN', 'USER']), processSplitDelivery);
 router.get('/builty/:id/delivery-logs', authenticate, getDeliveryLogs);
+router.get('/builty/delivery-logs/all', authenticate, getAllDeliveryLogs);
+
+// Status Update via Verification Code
+router.post('/builty/verify-code', authenticate, verifyCodeForStatusUpdate);
+router.post('/builty/update-status-by-code', authenticate, updateStatusByCode);
 
 // Ledgers & Outstanding Amounts
 router.get('/ledger/party', authenticate, getPartyLedger);
@@ -58,7 +68,7 @@ router.post('/ledger/entry', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN',
 
 // Branch Expense Management
 router.post('/expenses', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']), addExpense);
-router.get('/expenses', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']), getExpenses);
+router.get('/expenses', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN', 'USER']), getExpenses);
 
 // Branch Employee Debt & Salary Management
 router.post('/employees', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']), createEmployee);
@@ -69,8 +79,9 @@ router.put('/employees/:id', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']
 router.get('/reports/profit-loss', authenticate, authorize(['MAIN_ADMIN']), getProfitAndLossReport);
 router.get('/reports/dashboard-stats', authenticate, getDashboardStats);
 
-// Sub Admin & User Management
+// Sub Admin, Customer & User Management
 router.post('/admin/sub-admin', authenticate, authorize(['MAIN_ADMIN']), createSubAdmin);
+router.post('/admin/customer', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']), createCustomer);
 router.get('/admin/users', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']), getUsersList);
 router.post('/admin/user-status', authenticate, authorize(['MAIN_ADMIN', 'SUB_ADMIN']), toggleUserActiveStatus);
 
